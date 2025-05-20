@@ -4,7 +4,15 @@ Rede P2P de compartilhamento de arquivos baseado no protocolo BitTorrent.
 
 ## Requisitos
 
-Em ambiente controlado, rode:
+### PostgreSQL Linux\WSL
+
+Para instalar o PostgreSQL, execute
+```sh
+apt install postgresql
+
+```
+### Bibliotecas Python
+Em ambiente controlado, execute:
 
 ```
 make setup
@@ -12,7 +20,7 @@ make setup
 
 ## Cliente
 
-Rode:
+Execute, com o tracker rodando em outro processo ou remotamente:
 
 ```
 make client
@@ -20,13 +28,13 @@ make client
 
 ## Tracker
 
-Rode:
+Execute:
 
 ```
 make tracker
 ```
 
-## Banco de Dados PostgreSQLs
+## Setup do BD
 
 Para configurar o banco de dados local, crie-o com PostgreSQL, Observe os campos necessários e altere-os em `tracker/bd.py`. Sugestão:
 
