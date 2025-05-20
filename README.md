@@ -23,7 +23,7 @@ make setup
 Execute, com o tracker rodando em outro processo ou remotamente:
 
 ```
-make client
+make peer
 ```
 
 ## Tracker
@@ -31,7 +31,7 @@ make client
 Execute:
 
 ```
-make tracker
+make server
 ```
 
 ## Setup do BD
