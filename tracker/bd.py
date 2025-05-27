@@ -33,7 +33,7 @@ class TrackerDB:
         except psycopg2.Error:
             return False
 
-    def authenticate_user(self, username, password_hash):
+    def authenticate_user(self, username, password_hash,ip,port):
         self.cur.execute(
             "SELECT 1 FROM users WHERE username = %s AND password_hash = %s",
             (username, password_hash)
@@ -41,10 +41,10 @@ class TrackerDB:
         user = self.cur.fetchone()
         if user:
             self.cur.execute("""
-                INSERT INTO active_peers (username, last_seen)
-                VALUES (%s, NOW())
+                INSERT INTO active_peers (username, ip, port, last_seen)
+                VALUES (%s,%s,%s, NOW())
                 ON CONFLICT (username) DO UPDATE SET last_seen = NOW()
-            """, (username,))
+            """, (username,ip,port))
             self.conn.commit()
         return user is not None
 
@@ -108,7 +108,14 @@ class TrackerDB:
     def logout_user(self, username):
         self.cur.execute("DELETE FROM active_peers WHERE username = %s", (username,))
         self.conn.commit()
-
+    
+    def get_active_peers(self):
+        self.cur.execute("""
+            SELECT ap.ip, ap.port
+            FROM active_peers ap
+""" )
+        return self.cur.fetchall()
+        
 
     def get_active_peers_for_file(self, file_hash):
         self.cur.execute("""

@@ -9,7 +9,7 @@ from tracker.bd import TrackerDB
 PORT = 5000
 
 def threadedConn(conn, addr):
-    print(f"[+] Conexão recebida de {addr}")
+    print(f"Conexão recebida de {addr}")
     try:
         while True:
             msg = recv_json(conn)
@@ -26,7 +26,8 @@ def threadedConn(conn, addr):
             elif action == "login":
                 username = msg["username"]
                 password_hash = msg["password"]
-                if db.authenticate_user(username, password_hash):
+                client_ip,client_port = conn.getpeername()
+                if db.authenticate_user(username, password_hash, client_ip,client_port):
                     send_json(conn, {"status": "ok"})
                 else:
                     send_json(conn, {"status": "error", "message": "Login inválido"})
@@ -41,6 +42,13 @@ def threadedConn(conn, addr):
                 else:
                     send_json(conn, {"status": "error", "message": "Erro ao registrar arquivo"})
 
+            elif action == "get_online":
+                ativos = db.get_active_peers()
+                if ativos:
+                    send_json(conn, {"status": "ok", "active_peers": ativos})
+                else:
+                    send_json(conn, {"status" : "error", "message": "Sem Peers Online"})
+                    
             elif action == "get_file":
 
                 file_hash = msg["hash"]
@@ -83,6 +91,7 @@ def threadedConn(conn, addr):
                         send_json(conn, {"status": "error", "message": "Erro interno ao registrar heartbeat"})
                 else:
                     send_json(conn, {"status": "error", "message": "Username não fornecido no heartbeat"})
+                    
             elif action == "logout":
                 username = msg["username"]
                 if username:
@@ -102,7 +111,7 @@ def threadedConn(conn, addr):
         print(f"[!] Erro com {addr}: {e}")
     finally:
         conn.close()
-        print(f"[-] Conexão encerrada com {addr}")
+        print(f"Conexão encerrada com {addr}")
 
 # Não utilizada por enquanto
 def clean_loop():
@@ -113,15 +122,15 @@ def clean_loop():
 
 def start_tracker():
     #clean_thread = threading._start_new_thread(clean_loop,())
+    print("Tracker Iniciado\n")
     server = socket(AF_INET, SOCK_STREAM)
     server.bind(('', PORT))
     server.listen()
-    print(f"Ouvindo na Porta {PORT}")
     while True:
         conn, addr = server.accept()
         if conn:
-            print("Connected to:",addr[0],":",addr[1])
             connThread = threading._start_new_thread(threadedConn,(conn,addr))
     
 
-db = TrackerDB(5432)
+
+db = TrackerDB(5432) # Porta nativa do PostgreSQL

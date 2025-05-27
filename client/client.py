@@ -110,6 +110,18 @@ def get_peers_with_files():
             print(ans)
     except Exception as e:
         print(f"Falha na Pesquisa! {e}")
+
+def get_online_peers():
+    try:
+        with connect_to_tracker() as sckt:
+            send_json(sckt, {
+                "action": "get_online"
+            })
+            res = recv_json(sckt)
+            print(res)
+    except Exception as e:
+        print(f"Falha na busca: {e}")
+
     
 def logout_cl(username):
     global logged_user
@@ -151,6 +163,7 @@ def main():
             print(f"\nUsuário logado: {logged_user}")
             print("[1] Anunciar arquivo")
             print("[2] Buscar Arquivo")
+            print("[3] Ver Usuários Online")
             print("[9] Logout")
             print("[0] Sair")
             op = getch.getch()
@@ -158,6 +171,8 @@ def main():
                 announce_file(logged_user)
             if op == "2":
                 get_peers_with_files()
+            if op == "3":
+                get_online_peers()
             elif op == "9":
                 logout_cl(logged_user)
             elif op == "0":
