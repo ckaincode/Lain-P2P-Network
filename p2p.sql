@@ -1,4 +1,3 @@
--- Criar banco de dados antes: CREATE DATABASE p2p;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -21,8 +20,10 @@ CREATE TABLE file_owners (
     PRIMARY KEY (file_id, username)
 );
 
-CREATE TABLE IF NOT EXISTS active_peers (
+CREATE TABLE active_peers  (
     username TEXT PRIMARY KEY REFERENCES users(username),
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL,
     last_seen TIMESTAMP NOT NULL
 );
 
