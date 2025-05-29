@@ -46,6 +46,7 @@ def login():
         if resp["status"] == "ok":
             print("Login bem-sucedido.")
             #heartbeat = threading._start_new_thread(start_heartbeat,(username,))
+            print("Thread Started")
             return username
         else:
             print("Login inválido.")
@@ -83,9 +84,7 @@ def announce_file(username):
 
 def start_heartbeat(username):
     global logged_user
-    while True:
-        if logged_user == None:
-            break
+    while (logged_user != None):
         try:
             with connect_to_tracker() as sock:
                 send_json(sock, {
@@ -124,6 +123,7 @@ def get_online_peers():
 
     
 def logout_cl(username):
+    ''''
     global logged_user
     try:
         with connect_to_tracker() as sock:
@@ -139,7 +139,9 @@ def logout_cl(username):
     except Exception as e:
         print("Erro na conexão com o tracker:", e)
     finally:
-        logged_user = None
+    '''
+    global logged_user
+    logged_user = None
 
 def main():
     print("=== Peer Cliente ===")
@@ -166,7 +168,8 @@ def main():
             print("[3] Ver Usuários Online")
             print("[9] Logout")
             print("[0] Sair")
-            op = getch.getch()
+            heartbeat2 = threading._start_new_thread(start_heartbeat,(logged_user,))
+            op = input().strip()
             if op == "1":
                 announce_file(logged_user)
             if op == "2":
@@ -179,6 +182,7 @@ def main():
                 if logged_user:
                     logout_cl(logged_user)
                 break
+            
 
 if __name__ == "__main__":
     main()
