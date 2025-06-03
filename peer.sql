@@ -9,22 +9,24 @@ CREATE TABLE friends(
 );
 
 CREATE TABLE my_files(
-    file_id TEXT PRIMARY KEY NOT NULL,
-    chunk_amt INTEGER NOT NULL  -- Quantidade de Chunks
+    file_hash TEXT PRIMARY KEY NOT NULL,
+    chunk_amt INTEGER NOT NULL,  -- Quantidade de Chunks
+    curr_chunk_amt INTEGER NOT NULL
 );
+
 
 CREATE TABLE chunks(
-    chunk TEXT NOT NULL,
-    caminho TEXT NOT NULL,
-    file_id TEXT NOT NULL,
+    file_hash TEXT REFERENCES my_files(file_hash),
     chunk_idx INTEGER NOT NULL,
-    PRIMARY KEY  (chunk, caminho)
+    chunk_hash TEXT NOT NULL,
+    PRIMARY KEY  (file_hash,chunk_idx)
 );
-
-CREATE TABLE chunk_owners(
-    file_id TEXT NOT NULL,
-    chunk_owner TEXT NOT NULL,
-    chunk_amt INTEGER NOT NULL,
-    PRIMARY KEY (file_id, chunk_owner)
-);
-
+'''
+--
+--CREATE TABLE chunk_owners(
+--    file_id TEXT NOT NULL,
+--    chunk_owner TEXT NOT NULL,
+--    chunk_amt INTEGER NOT NULL,
+--    PRIMARY KEY (file_id, chunk_owner)
+--);
+'''

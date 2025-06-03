@@ -121,7 +121,7 @@ def clean_loop():
         time.sleep(15)
 
 def start_tracker():
-    #clean_thread = threading._start_new_thread(clean_loop,())
+    clean_thread = threading._start_new_thread(clean_loop,())
     print("Tracker Iniciado\n")
     server = socket(AF_INET, SOCK_STREAM)
     server.bind(('', PORT))
