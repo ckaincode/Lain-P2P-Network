@@ -5,6 +5,9 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL
 );
 
+
+--TODO
+-- File descripition
 CREATE TABLE files (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,

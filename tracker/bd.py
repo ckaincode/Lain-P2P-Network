@@ -111,7 +111,7 @@ class TrackerDB:
     
     def get_active_peers(self):
         self.cur.execute("""
-            SELECT ap.ip, ap.port
+            SELECT ap.username, ap.ip, ap.port
             FROM active_peers ap
 """ )
         return self.cur.fetchall()
