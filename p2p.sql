@@ -5,7 +5,6 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL
 );
 
-
 --TODO
 -- File descripition
 CREATE TABLE files (
@@ -17,9 +16,7 @@ CREATE TABLE files (
 
 CREATE TABLE file_owners (
     file_id INTEGER REFERENCES files(id),
-    username TEXT REFERENCES users(username),
-    ip TEXT NOT NULL,
-    port INTEGER NOT NULL,
+    username TEXT REFERENCES active_peers(username),
     PRIMARY KEY (file_id, username)
 );
 
