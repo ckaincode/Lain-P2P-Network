@@ -1,6 +1,7 @@
 from socket import *
 import threading
 import json
+import requests 
 import time
 from common.utils import recv_json, send_json, hash_password
 from tracker.bd import TrackerDB
@@ -91,6 +92,20 @@ def threadedConn(conn, addr):
                         send_json(conn, {"status": "error", "message": "Erro interno ao registrar heartbeat"})
                 else:
                     send_json(conn, {"status": "error", "message": "Username não fornecido no heartbeat"})
+            
+            elif action == "join_swarm":
+                username = msg["username"]
+                hash = msg["hash"]
+                if username:
+                    try:
+                        db.link_file_to_user(hash,username)
+                        send_json(conn, {'status': "ok"})
+                    except Exception as e:
+                        print(f"Erro no registro de {username}: {e}")
+                        send_json(conn, {"status": "error", "message": "Erro ao se juntar ao swarm"})
+                else:
+                    send_json(conn, {"status": "error", "message": "Username não fornecido para swarm"})
+
                     
             elif action == "logout":
                 username = msg["username"]
@@ -113,7 +128,6 @@ def threadedConn(conn, addr):
         conn.close()
         print(f"Conexão encerrada com {addr}")
 
-# Não utilizada por enquanto
 def clean_loop():
     dblocal = TrackerDB(5432)
     while True:

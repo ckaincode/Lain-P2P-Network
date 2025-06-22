@@ -1,5 +1,6 @@
 import psycopg2 # Módulo de Interface com o DB
 import time
+import requests
 
 """
 MUDAR DE ACORDO COM CONFIGURAÇÃO LOCAL
@@ -117,9 +118,9 @@ class TrackerDB:
         return self.cur.fetchall()
         
 
-    def get_active_peers_for_file(self, file_hash):
+def get_active_peers_for_file(self, file_hash):
         self.cur.execute("""
-            SELECT u.username, fo.ip, fo.port
+            SELECT u.username, ap.ip, ap.port     
             FROM files f
             JOIN file_owners fo ON f.id = fo.file_id
             JOIN active_peers ap ON fo.username = ap.username
@@ -127,5 +128,4 @@ class TrackerDB:
             WHERE f.hash = %s
         """, (file_hash,))      
         return self.cur.fetchall()
-
         

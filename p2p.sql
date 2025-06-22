@@ -17,6 +17,7 @@ CREATE TABLE files (
 CREATE TABLE file_owners (
     file_id INTEGER REFERENCES files(id),
     username TEXT REFERENCES active_peers(username),
+    announcer BOOLEAN NOT NULL,
     PRIMARY KEY (file_id, username)
 );
 
