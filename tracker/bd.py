@@ -67,7 +67,7 @@ class TrackerDB:
             print("[DB ERROR]", e)
             return None
         
-    def link_file_to_user(self, file_hash, username, addr):
+    def link_file_to_user(self, file_hash, username, announcer):
         try:
             # Pega o id do arquivo
             self.cur.execute("SELECT id FROM files WHERE hash = %s", (file_hash,))
@@ -77,8 +77,8 @@ class TrackerDB:
 
             # Insere na tabela file_owners usando os ids corretos
             self.cur.execute(
-                "INSERT INTO file_owners (file_id, username, ip, port) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (file_id,username,addr[0],addr[1])
+                "INSERT INTO file_owners (file_id, username,announcer) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (file_id,username,announcer)
             )
             self.conn.commit()
             return True
@@ -88,7 +88,7 @@ class TrackerDB:
     def cleanup_inactive_users(self):
         try:
             print("Limpando...")
-            self.cur.execute("DELETE FROM active_peers WHERE last_seen < NOW() - INTERVAL '40 seconds'")
+            self.cur.execute("DELETE FROM active_peers WHERE last_seen < NOW() - INTERVAL '20 seconds'")
             self.conn.commit()
             self.cur.execute("SELECT * FROM active_peers;")
             active = self.cur.fetchall()
@@ -118,14 +118,14 @@ class TrackerDB:
         return self.cur.fetchall()
         
 
-def get_active_peers_for_file(self, file_hash):
-        self.cur.execute("""
-            SELECT u.username, ap.ip, ap.port     
-            FROM files f
-            JOIN file_owners fo ON f.id = fo.file_id
-            JOIN active_peers ap ON fo.username = ap.username
-            JOIN users u ON u.username = fo.username
-            WHERE f.hash = %s
-        """, (file_hash,))      
-        return self.cur.fetchall()
+    def get_active_peers_for_file(self, file_hash):
+            self.cur.execute("""
+                SELECT u.username, ap.ip, ap.port     
+                FROM files f
+                JOIN file_owners fo ON f.id = fo.file_id
+                JOIN active_peers ap ON fo.username = ap.username
+                JOIN users u ON u.username = fo.username
+                WHERE f.hash = %s
+            """, (file_hash,))      
+            return self.cur.fetchall()
         

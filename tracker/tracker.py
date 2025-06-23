@@ -38,7 +38,7 @@ def threadedConn(conn, addr):
                 file = msg["file"]
                 file_id = db.register_file(file["name"], file["size"], file["hash"])
                 if file_id:
-                    db.link_file_to_user(file["hash"], username,addr)
+                    db.link_file_to_user(file["hash"], username,True)
                     send_json(conn, {"status": "ok"})
                 else:
                     send_json(conn, {"status": "error", "message": "Erro ao registrar arquivo"})
@@ -96,9 +96,10 @@ def threadedConn(conn, addr):
             elif action == "join_swarm":
                 username = msg["username"]
                 hash = msg["hash"]
+                announcer = msg["announcer"]
                 if username:
                     try:
-                        db.link_file_to_user(hash,username)
+                        db.link_file_to_user(hash,username,announcer)
                         send_json(conn, {'status': "ok"})
                     except Exception as e:
                         print(f"Erro no registro de {username}: {e}")

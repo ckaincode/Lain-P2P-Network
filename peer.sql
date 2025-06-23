@@ -24,8 +24,10 @@ CREATE TABLE chat_member(
 );
 
 CREATE TABLE my_files(
-    file_hash TEXT PRIMARY KEY NOT NULL,
+    uowner TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
     chunk_amt INTEGER NOT NULL,  -- Quantidade de Chunks total do Arquivo
     curr_chunk_amt INTEGER NOT NULL,
-    chunk_bit_map BLOB NOT NULL
+    chunk_bit_map BYTEA NOT NULL,
+    PRIMARY KEY (uowner,file_hash)
 );

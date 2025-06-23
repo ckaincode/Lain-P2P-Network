@@ -1,6 +1,7 @@
 import hashlib
 import json
 import struct
+import shutil
 import base64
 import os
 
@@ -78,3 +79,48 @@ def divide_in_chunks(file_path: str, file_hash: str):
     except Exception as e:
         print(f"❌ Erro ao dividir arquivo: {e}")
         return 0
+
+def rebuild_from_chunks(file_hash: str) -> bool:
+    """Reconstrói o arquivo a partir dos chunks salvos em files/<file_hash> e valida o hash final."""
+    chunk_dir = os.path.join("files", file_hash)
+
+    if not os.path.isdir(chunk_dir):
+        print(f"❌ Diretório {chunk_dir} não encontrado.")
+        return False
+
+    # Ordena os arquivos por índice
+    chunk_files = sorted(
+        [f for f in os.listdir(chunk_dir) if f.endswith(".json")],
+        key=lambda name: int(name.split(".")[0])
+    )
+
+    sha256 = hashlib.sha256()
+
+    try:
+        with open('binarios_finais', "wb") as out_file:
+            for file_name in chunk_files:
+                chunk_path = os.path.join(chunk_dir, file_name)
+
+                with open(chunk_path, "r") as chunk_file:
+                    pkt = json.load(chunk_file)
+
+                # Decodifica o payload (já validado quando foi recebido)
+                payload = base64.b64decode(pkt["payload"])
+
+                # Escreve e atualiza o hash final
+                out_file.write(payload)
+                sha256.update(payload)
+
+        final_hash = sha256.hexdigest()
+
+        if final_hash == file_hash:
+            print(f"✅ Arquivo reconstruído com sucesso e validado")
+            return True
+        else:
+            print(f"⚠️ Arquivo reconstruído, mas o hash não confere!")
+            shutil.rmtree(f'files/{file_hash}')
+            return False
+
+    except Exception as e:
+        print(f"❌ Erro ao reconstruir arquivo: {e}")
+        return False
