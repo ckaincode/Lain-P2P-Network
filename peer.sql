@@ -1,7 +1,7 @@
 CREATE TABLE friends(
-    username PRIMARY KEY TEXT NOT NULL,
+    username TEXT PRIMARY KEY,
     pkey TEXT NOT NULL
-)
+);
 
 CREATE TABLE extern_chats(
     chat_name TEXT NOT NULL,
@@ -13,13 +13,13 @@ CREATE TABLE extern_chats(
 CREATE TABLE my_chats(
     chat_name TEXT NOT NULL,
     chat_priv_key INTEGER NOT NULL,
-    chat_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL
 );
 
 CREATE TABLE chat_member(
     member TEXT NOT NULL,
     chat_id INTEGER NOT NULL,
-    member_key BLOB NOT NULL,
+    member_key BYTEA NOT NULL,
     PRIMARY KEY (member, chat_id)
 );
 

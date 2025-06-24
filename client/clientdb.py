@@ -1,7 +1,7 @@
 import psycopg2
 
 class PeerDB:
-    def __init__(self, dbname='p2p_peer', user='caiocesar', password='lokoloco20', host='localhost', port=5432):
+    def __init__(self, username,dbname='p2p_peer', user='caiocesar', password='lokoloco10', host='localhost', port=5432):
         self.conn = psycopg2.connect(
             dbname=dbname,
             user=user,
@@ -10,6 +10,7 @@ class PeerDB:
             port=port
         )
         self.conn.autocommit = True
+        self.username = username
         self.cur = self.conn.cursor()
 
     def create_or_reset_file_entry(self, uowner, file_hash, chunk_amt):
@@ -38,9 +39,18 @@ class PeerDB:
         chunk_amt, bitmap_bytes = row
         bitmap_bits = []
 
-        for byte in bitmap_bytes:
+        # Itera sobre o objeto bytes retornado pelo banco de dados
+        for single_byte_object in bitmap_bytes:
+            
+            # --- CORREÇÃO DEFINITIVA ---
+            # Extrai o valor inteiro (0-255) do objeto bytes de um byte.
+            # Ex: se single_byte_object for b'\x0f', int_value será 15.
+            int_value = single_byte_object[0]
+
             for i in range(8):
-                bitmap_bits.append((byte >> (7 - i)) & 1)
+                # Agora a operação '>>' é feita entre dois inteiros.
+                bit = (int_value >> (7 - i)) & 1
+                bitmap_bits.append(bool(bit))
 
         return bitmap_bits[:chunk_amt]
 

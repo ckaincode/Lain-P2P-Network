@@ -50,11 +50,10 @@ def make_pkt(chunk: bytes, index: int, file_hash: str) -> dict:
     }
     return packet_dict
 
-
-def divide_in_chunks(file_path: str, file_hash: str):
+def divide_in_chunks(file_path: str, file_hash: str, username: str):
     """Divide o arquivo em chunks, cria pacotes e os salva em arquivos nomeados por índice."""
-    # Certifique-se de que a pasta existe
-    chunk_dir = os.path.join("files", file_hash)
+    # Constrói o caminho baseado no usuário
+    chunk_dir = os.path.join(username, "files", file_hash)
     os.makedirs(chunk_dir, exist_ok=True)
 
     try:

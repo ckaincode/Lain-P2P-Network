@@ -27,8 +27,11 @@ def threadedConn(conn, addr):
             elif action == "login":
                 username = msg["username"]
                 password_hash = msg["password"]
-                client_ip,client_port = conn.getpeername()
-                if db.authenticate_user(username, password_hash, client_ip,client_port):
+                port = msg["port"] # Recebe a porta da mensagem
+                client_ip, _ = conn.getpeername() # Pega apenas o IP da conexão
+                
+                # Usa o IP da conexão, mas a porta informada pelo cliente
+                if db.authenticate_user(username, password_hash, client_ip, port):
                     send_json(conn, {"status": "ok"})
                 else:
                     send_json(conn, {"status": "error", "message": "Login inválido"})
@@ -36,7 +39,8 @@ def threadedConn(conn, addr):
             elif action == "announce_file":
                 username = msg["username"]
                 file = msg["file"]
-                file_id = db.register_file(file["name"], file["size"], file["hash"])
+                chunk_count = msg["chunk_count"]
+                file_id = db.register_file(file["name"], file["size"], file["hash"],chunk_count)
                 if file_id:
                     db.link_file_to_user(file["hash"], username,True)
                     send_json(conn, {"status": "ok"})
@@ -58,10 +62,11 @@ def threadedConn(conn, addr):
                     send_json(conn, {"status": "error", "message": "Hash não fornecido."})
                     return
 
-                peers = db.get_active_peers_for_file(file_hash)
+                file_info = db.get_active_peers_for_file(file_hash)
 
-                if peers:
+                if file_info and file_info["peers"]:
                     # Constrói a resposta com os peers ativos que têm o arquivo
+                    '''
                     peer_list = []
                     for username, ip, port in peers:
                         peer_list.append({
@@ -74,9 +79,17 @@ def threadedConn(conn, addr):
                         "status": "ok",
                         "peers": peer_list
                     })
-                else:
+                    '''
+
+                if file_info and file_info["peers"]:
                     send_json(conn, {
                         "status": "ok",
+                        "peers": file_info["peers"],
+                        "chunk_count": file_info["chunk_count"] # Envia o chunk_count para o downloader
+                    })
+                else:
+                    send_json(conn, {
+                        "status": "not_found",
                         "peers": "Não há peers como esse arquivo!"
                     })
 

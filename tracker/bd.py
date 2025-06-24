@@ -49,11 +49,12 @@ class TrackerDB:
             self.conn.commit()
         return user is not None
 
-    def register_file(self, name, size, file_hash):
+    def register_file(self, name, size, file_hash,chunk_count):
         try:
             self.cur.execute(
-                "INSERT INTO files (name, size, hash) VALUES (%s, %s, %s) ON CONFLICT (hash) DO NOTHING RETURNING id",
-                (name, size, file_hash)
+                # Insere o chunk_count
+                "INSERT INTO files (name, size, hash, chunk_count) VALUES (%s, %s, %s, %s) ON CONFLICT (hash) DO NOTHING RETURNING id",
+                (name, size, file_hash, chunk_count)
             )
             row = self.cur.fetchone()
             if row:
@@ -116,8 +117,30 @@ class TrackerDB:
             FROM active_peers ap
 """ )
         return self.cur.fetchall()
+    
+    def get_active_peers_for_file(self, file_hash):
+        # Esta query agora busca o chunk_count também
+        self.cur.execute("""
+            SELECT u.username, ap.ip, ap.port, f.chunk_count   
+            FROM files f
+            JOIN file_owners fo ON f.id = fo.file_id
+            JOIN active_peers ap ON fo.username = ap.username
+            JOIN users u ON u.username = fo.username
+            WHERE f.hash = %s
+        """, (file_hash,))      
         
+        results = self.cur.fetchall()
+        if not results:
+            return None
+            
+        # Estrutura a resposta
+        peers = [{"username": r[0], "ip": r[1], "port": r[2]} for r in results]
+        chunk_count = results[0][3] # O chunk_count é o mesmo para todos os resultados
+        
+        return {"peers": peers, "chunk_count": chunk_count}
 
+        
+'''
     def get_active_peers_for_file(self, file_hash):
             self.cur.execute("""
                 SELECT u.username, ap.ip, ap.port     
@@ -128,4 +151,4 @@ class TrackerDB:
                 WHERE f.hash = %s
             """, (file_hash,))      
             return self.cur.fetchall()
-        
+'''

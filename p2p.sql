@@ -12,6 +12,7 @@ CREATE TABLE files (
     name TEXT NOT NULL,
     size BIGINT NOT NULL,
     hash TEXT UNIQUE NOT NULL
+    chunk_count INTEGER NOT NULL DEFAULT 0 -- Adicione esta linha
 );
 
 CREATE TABLE file_owners (
