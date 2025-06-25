@@ -1,114 +1,122 @@
+# clientdb.py - VERSÃO FINAL E CORRIGIDA
+
 import psycopg2
 
 class PeerDB:
-    def __init__(self, username,dbname='p2p_peer', user='caiocesar', password='lokoloco10', host='localhost', port=5432):
-        self.conn = psycopg2.connect(
-            dbname=dbname,
-            user=user,
-            password=password,
-            host=host,
-            port=port
-        )
-        self.conn.autocommit = True
-        self.username = username
-        self.cur = self.conn.cursor()
+    def __init__(self, username, dbname='p2p_peer', user='caiocesar', password='lokoloco10', host='localhost', port=5432):
+        try:
+            # Se você estiver usando um DB por peer, a linha abaixo pode ser usada.
+            # dbname = f"peer_db_{username}"
+            self.conn = psycopg2.connect(dbname=dbname, user=user, password=password, host=host, port=port)
+            self.conn.autocommit = True
+            self.username = username
+            self.cur = self.conn.cursor()
+        except psycopg2.OperationalError as e:
+            print(f"ERRO CRÍTICO: Não foi possível conectar ao banco de dados '{dbname}'. Verifique se ele existe. Detalhes: {e}")
+            exit()
+
+    def entry_exists(self, file_hash: str) -> bool:
+        if not file_hash: return False
+        self.cur.execute("SELECT 1 FROM my_files WHERE uowner = %s AND file_hash = %s", (self.username, file_hash))
+        return self.cur.fetchone() is not None
 
     def create_or_reset_file_entry(self, uowner, file_hash, chunk_amt):
-        """Cria (ou reinicializa) entrada de arquivo com bitmap zerado."""
-        empty_map = bytearray(chunk_amt)
-        self.cur.execute("""
-            INSERT INTO my_files (uowner, file_hash, chunk_amt, curr_chunk_amt, chunk_bit_map)
-            VALUES (%s, %s, %s, 0, %s)
-            ON CONFLICT (uowner, file_hash) DO UPDATE SET 
-                chunk_amt = EXCLUDED.chunk_amt,
-                curr_chunk_amt = 0,
-                chunk_bit_map = EXCLUDED.chunk_bit_map
-        """, (uowner, file_hash, chunk_amt, bytes(empty_map)))
+        # CORREÇÃO CRÍTICA: Calcula o número de bytes corretamente.
+        num_bytes = (chunk_amt + 7) // 8
+        empty_map = bytearray(num_bytes)
+        self.cur.execute(
+            "INSERT INTO my_files (uowner, file_hash, chunk_amt, curr_chunk_amt, chunk_bit_map) VALUES (%s, %s, %s, 0, %s) "
+            "ON CONFLICT (uowner, file_hash) DO UPDATE SET chunk_amt = EXCLUDED.chunk_amt, curr_chunk_amt = 0, chunk_bit_map = EXCLUDED.chunk_bit_map",
+            (uowner, file_hash, chunk_amt, bytes(empty_map))
+        )
 
     def get_bitmap(self, file_hash: str) -> list[bool]:
-        self.cur.execute("""
-            SELECT chunk_amt, chunk_bit_map
-            FROM my_files
-            WHERE uowner = %s AND file_hash = %s
-        """, (self.username, file_hash))
-        
-        row = self.cur.fetchone()
-        if not row:
+        if not file_hash: return []
+        try:
+            self.cur.execute("SELECT chunk_amt, chunk_bit_map FROM my_files WHERE uowner = %s AND file_hash = %s", (self.username, file_hash))
+            if self.cur.rowcount == 0: return []
+            row = self.cur.fetchone()
+            if not row: return []
+
+            chunk_amt, bitmap_bytes = row
+            bitmap_bits = []
+            iterable_bytes = [bitmap_bytes] if isinstance(bitmap_bytes, int) else bitmap_bytes or []
+
+            for byte_value in iterable_bytes:
+                int_value = byte_value[0] if isinstance(byte_value, bytes) else byte_value
+                for i in range(8):
+                    bit = (int_value >> (7 - i)) & 1
+                    bitmap_bits.append(bool(bit))
+            return bitmap_bits[:chunk_amt]
+        except psycopg2.Error as e:
+            print(f"[DB_ERROR] em get_bitmap: {e}")
             return []
 
-        chunk_amt, bitmap_bytes = row
-        bitmap_bits = []
-
-        # Itera sobre o objeto bytes retornado pelo banco de dados
-        for single_byte_object in bitmap_bytes:
-            
-            # --- CORREÇÃO DEFINITIVA ---
-            # Extrai o valor inteiro (0-255) do objeto bytes de um byte.
-            # Ex: se single_byte_object for b'\x0f', int_value será 15.
-            int_value = single_byte_object[0]
-
-            for i in range(8):
-                # Agora a operação '>>' é feita entre dois inteiros.
-                bit = (int_value >> (7 - i)) & 1
-                bitmap_bits.append(bool(bit))
-
-        return bitmap_bits[:chunk_amt]
-
+# Em client/clientdb.py
 
     def mark_chunk_received(self, file_hash: str, index: int):
-        self.cur.execute("""
-            SELECT chunk_amt, curr_chunk_amt, chunk_bit_map
-            FROM my_files
-            WHERE uowner = %s AND file_hash = %s
-        """, (self.username, file_hash))
-        row = self.cur.fetchone()
+        """Marca um chunk como recebido, definindo o bit correspondente como '1' de forma segura."""
+        try:
+            self.cur.execute("SELECT chunk_bit_map FROM my_files WHERE uowner = %s AND file_hash = %s", (self.username, file_hash))
+            if self.cur.rowcount == 0: return False
+            
+            row = self.cur.fetchone()
+            if not row: return False
+            
+            bit_map = row[0]
+            byte_index, bit_index_from_left = divmod(index, 8)
 
-        if not row:
+            # Garante que o byte_index não esteja fora dos limites do bitmap
+            if byte_index >= len(bit_map):
+                print(f"[DB_WARN] Índice de chunk {index} está fora dos limites do bitmap.")
+                return False
+
+            # --- CORREÇÃO DEFINITIVA DO TYPEERROR ---
+            # Pega o byte específico e garante que estamos trabalhando com seu valor inteiro.
+            byte_value = bit_map[byte_index]
+            int_value = byte_value[0] if isinstance(byte_value, bytes) else byte_value
+            
+            # Checa o bit atual para evitar contagem dupla de chunks
+            if (int_value >> (7 - bit_index_from_left)) & 1:
+                return True # O bit já é 1, não faz nada.
+
+            # Cria uma cópia mutável do bitmap para modificação
+            mutable_bitmap = bytearray(bit_map)
+            
+            # Cria a máscara para setar o bit para 1
+            mask = 1 << (7 - bit_index_from_left)
+            mutable_bitmap[byte_index] |= mask
+            
+            # Atualiza o banco de dados
+            self.cur.execute(
+                "UPDATE my_files SET chunk_bit_map = %s, curr_chunk_amt = curr_chunk_amt + 1 WHERE uowner = %s AND file_hash = %s",
+                (bytes(mutable_bitmap), self.username, file_hash)
+            )
+            return True
+        except psycopg2.Error as e:
+            print(f"[DB_ERROR] em mark_chunk_received: {e}")
             return False
 
-        chunk_amt, curr_amt, bit_map = row
-        byte_index = index // 8
-        bit_index = index % 8
+    def mark_file_as_complete(self, file_hash, chunk_amt):
+        num_bytes = (chunk_amt + 7) // 8
+        full_map = bytearray([0xFF] * num_bytes)
+        self.cur.execute(
+            "UPDATE my_files SET curr_chunk_amt = %s, chunk_bit_map = %s WHERE uowner = %s AND file_hash = %s",
+            (chunk_amt, bytes(full_map), self.username, file_hash)
+        )
 
-        mutable_bitmap = bytearray(bit_map)
-        mutable_bitmap[byte_index] |= (1 << (7 - bit_index))  # Define bit como 1
-
-        self.cur.execute("""
-            UPDATE my_files
-            SET chunk_bit_map = %s,
-                curr_chunk_amt = curr_chunk_amt + 1
-            WHERE uowner = %s AND file_hash = %s
-        """, (bytes(mutable_bitmap), self.username, file_hash))
-        self.conn.commit()
-        return True
-
-    def is_file_complete(self, uowner, file_hash):
-        """Verifica se todos os chunks foram recebidos."""
-        self.cur.execute("""
-            SELECT chunk_amt, curr_chunk_amt FROM my_files
-            WHERE uowner = %s AND file_hash = %s
-        """, (uowner, file_hash))
-        row = self.cur.fetchone()
-        return row and row[0] == row[1]
-
-    def remove_file_entry(self, uowner, file_hash):
-        """Remove completamente a entrada de um arquivo (ex: hash inválido)."""
-        self.cur.execute("""
-            DELETE FROM my_files WHERE uowner = %s AND file_hash = %s
-        """, (uowner, file_hash))
-
-    def has_all_chunks(self, file_hash):
-        self.cur.execute("""
-            SELECT curr_chunk_amt, chunk_amt
-            FROM my_files
-            WHERE file_hash = %s AND uowner = %s
-        """, (file_hash, self.username))
-        row = self.cur.fetchone()
-        if not row:
+    def has_all_chunks(self, file_hash: str) -> bool:
+        if not file_hash: return False
+        try:
+            self.cur.execute("SELECT curr_chunk_amt, chunk_amt FROM my_files WHERE file_hash = %s AND uowner = %s", (file_hash, self.username))
+            if self.cur.rowcount == 0: return False
+            row = self.cur.fetchone()
+            if not row: return False
+            curr, total = row
+            return total > 0 and curr == total
+        except psycopg2.Error as e:
+            print(f"[DB_ERROR] em has_all_chunks: {e}")
             return False
-        curr, total = row
-        return curr == total
-
 
     def close(self):
         self.cur.close()
