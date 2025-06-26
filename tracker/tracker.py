@@ -46,6 +46,15 @@ def threadedConn(conn, addr):
                     send_json(conn, {"status": "ok"})
                 else:
                     send_json(conn, {"status": "error", "message": "Erro ao registrar arquivo"})
+            
+            elif action == "get_peer_address":
+                username = msg.get("username")
+                address = db.get_peer_address(username)
+                if address:
+                    ip, port = address
+                    send_json(conn, {"status": "ok", "ip": ip, "port": port})
+                else:
+                    send_json(conn, {"status": "not_found", "message": "Usuário offline ou não existe."})
 
             elif action == "get_online":
                 ativos = db.get_active_peers()

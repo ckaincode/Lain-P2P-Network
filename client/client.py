@@ -13,6 +13,7 @@ logged_menu = False
 swarm = None
 active_sockets = {}
 db = None
+username_to_peer_id = {} 
 
 def connect_to_tracker():
     return socket.create_connection((TRACKER_HOST, TRACKER_PORT))
@@ -126,12 +127,19 @@ def handle_peer_session(conn, addr):
     peer_id = f"{addr[0]}:{addr[1]}"
     print(f"[+] Iniciando sessão com {peer_id}")
     active_sockets[peer_id] = conn
-    if swarm: swarm.add_peer(peer_id)
     
-    conn.setblocking(False)
+    try:
+        send_json(conn, {"action": "HANDSHAKE", "username": logged_user})
+    except Exception as e:
+        print(f"[!] Falha no handshake inicial com {peer_id}: {e}")
+        # Encerra a sessão se o handshake inicial falhar
+        if peer_id in active_sockets: del active_sockets[peer_id]
+        conn.close()
+        return
     last_request_time = 0
 
     try:
+        conn.setblocking(False)
         while True:
             # PARTE DE LEITURA DE MENSAGENS
             try:
@@ -142,6 +150,12 @@ def handle_peer_session(conn, addr):
                 file_hash = msg.get("file_hash")
                 
     # Em client.py -> dentro da sua função unificada de comunicação (handle_peer_session)
+                if action == "HANDSHAKE":
+                    peer_username = msg.get("username")
+                    print(f"Handshake recebido: {peer_id} é {peer_username}")
+                    username_to_peer_id[peer_username] = peer_id
+                    # Adiciona ao swarm APÓS saber quem é o peer
+                    if swarm: swarm.add_peer(peer_id)
 
                 if action == "CHUNK":
                     index = msg.get("piece_index")
@@ -201,6 +215,40 @@ def handle_peer_session(conn, addr):
                     if swarm: swarm.update_peer_choke_status(peer_id, is_choking=False)
                 elif action == "HAVE":
                     if swarm: swarm.mark_peer_have_chunk(peer_id, msg.get("index"))
+                elif action == "PRIVATE_MESSAGE":
+                    sender = msg.get("from_user")
+                    recipient = msg.get("to_user")
+                    text = msg.get("text")
+
+                    # 1. Verifica se a mensagem é para nós e se o remetente é um amigo.
+                    if recipient == logged_user and db.is_friend(sender):
+                        print(f"\n\n--- Nova Mensagem de {sender} ---")
+                        print(f"> {text}")
+                        print("---------------------------------")
+
+                        # 2. Lógica para salvar a mensagem em um arquivo de log.
+                        try:
+                            # Garante um nome de arquivo consistente ordenando os nomes.
+                            # Ex: o chat entre 'a' e 'b' sempre será 'a-b_chat.txt'.
+                            log_participants = sorted([logged_user, sender])
+                            log_filename = f"{log_participants[0]}-{log_participants[1]}_chat.log"
+                            
+                            # Cria o diretório de logs se ele não existir.
+                            os.makedirs("chat_logs", exist_ok=True)
+                            log_path = os.path.join("chat_logs", log_filename)
+                            
+                            # Escreve a mensagem no arquivo com data e hora.
+                            with open(log_path, "a") as log_file:
+                                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                                log_file.write(f"[{timestamp}] {sender}: {text}\n")
+
+                        except Exception as e:
+                            print(f"[!] Falha ao salvar a mensagem no log: {e}")
+                        
+                        # Imprime o prompt de input novamente para não quebrar a interface do usuário.
+                        print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[4] Adicionar Amigo\n[5] Enviar Mensagem\n[9] Logout\n[0] Sair")
+                        print(">> ", end="", flush=True)
+
                 elif action == "GET_CHUNK":
                     index = msg.get("piece_index")
                     if not swarm or swarm.file_hash != file_hash or not swarm.can_upload_to(peer_id):
@@ -243,9 +291,77 @@ def handle_peer_session(conn, addr):
             time.sleep(0.5)
     finally:
         print(f"[-] Encerrando sessão com {peer_id}.")
+        # Remove o usuário do mapeamento ao desconectar
+        disconnected_user = next((user for user, pid in username_to_peer_id.items() if pid == peer_id), None)
+        if disconnected_user:
+            del username_to_peer_id[disconnected_user]
+            
         conn.close()
         if peer_id in active_sockets: del active_sockets[peer_id]
         if swarm: swarm.remove_peer(peer_id)
+
+def add_friend_ui():
+    """Interface para adicionar um amigo."""
+    friend_name = input("Digite o nome de usuário do amigo a ser adicionado: ").strip()
+    if not friend_name:
+        print("Nome de usuário não pode ser vazio.")
+        return
+    
+    # Adiciona o amigo no banco de dados local.
+    db.add_friend(friend_name)
+
+
+def send_message_ui():
+    """Interface para enviar uma mensagem direta que reutiliza conexões existentes."""
+    recipient = input("Digite o nome do amigo para quem quer enviar a mensagem: ").strip()
+    message_text = input("Digite sua mensagem: ")
+
+    peer_id = username_to_peer_id.get(recipient)
+    target_socket = None
+
+    if peer_id and peer_id in active_sockets:
+        print(f"Reutilizando conexão existente com {recipient}.")
+        target_socket = active_sockets[peer_id]
+    else:
+        print(f"Iniciando uma nova conexão com {recipient}...")
+        addr = get_address_for_user(recipient)
+        if addr:
+            try:
+                conn = socket.create_connection(addr, timeout=5)
+                # Inicia a thread de sessão para a nova conexão
+                threading.Thread(target=handle_peer_session, args=(conn, addr), daemon=True).start()
+                time.sleep(0.5) # Dá tempo para o handshake ocorrer
+                # Após o handshake, a conexão deve estar nos nossos mapas
+                peer_id = username_to_peer_id.get(recipient)
+                if peer_id:
+                    target_socket = active_sockets[peer_id]
+            except Exception as e:
+                print(f"Falha ao conectar com {recipient}: {e}")
+        else:
+            print(f"Não foi possível encontrar {recipient}. Ele pode estar offline.")
+
+    # Envia a mensagem se tivermos um socket válido
+    if target_socket:
+        message = {
+            "action": "PRIVATE_MESSAGE", "from_user": logged_user,
+            "to_user": recipient, "text": message_text
+        }
+        send_json(target_socket, message)
+        print("Mensagem enviada com sucesso!")
+    else:
+        print("Falha ao enviar mensagem.")
+
+def get_address_for_user(username):
+    """Pede ao tracker o endereço de um usuário específico."""
+    try:
+        with connect_to_tracker() as sock:
+            send_json(sock, {"action": "get_peer_address", "username": username})
+            response = recv_json(sock)
+            if response and response.get("status") == "ok":
+                return (response["ip"], response["port"])
+    except Exception as e:
+        print(f"[!] Falha ao buscar endereço para {username}: {e}")
+    return None
 
 def handle_requests_peers():
     global LISTENING_PORT
@@ -294,7 +410,7 @@ def logged_thread():
     threading.Thread(target=start_heartbeat, args=(logged_user,), daemon=True).start()
     threading.Thread(target=upload_manager_loop, daemon=True).start()   
     while logged_user:
-        print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[9] Logout\n[0] Sair")
+        print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[4] Adicionar Amigo\n[5]Mandar Mensagem\n[9] Logout\n[0] Sair")
         op = input(">> ").strip()
         if op == "1":
             file_name = input("Nome: "); file_path = input("Caminho: ")
@@ -303,8 +419,15 @@ def logged_thread():
             hash_buscada = input("Hash: ").strip()
             threading.Thread(target=download_file, args=(hash_buscada,)).start()
         elif op == "3": get_online_peers()
-        elif op == "9": logout_cl()
-        elif op == "0": logout_cl(); break
+        elif op == "4":
+            add_friend_ui()
+        elif op == "5":
+            send_message_ui()
+        elif op == "9": 
+            logout_cl()
+        elif op == "0": 
+            logout_cl()
+            break
     logged_menu = False
 
 def main():

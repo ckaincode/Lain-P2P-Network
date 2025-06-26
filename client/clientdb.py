@@ -121,3 +121,27 @@ class PeerDB:
     def close(self):
         self.cur.close()
         self.conn.close()
+
+    def add_friend(self, friend_username: str):
+        """Adiciona um amigo à lista local. Ignora a chave pública por enquanto."""
+        try:
+            # pkey pra depois
+            self.cur.execute(
+                "INSERT INTO friends (username, pkey) VALUES (%s, %s) ON CONFLICT(username) DO NOTHING",
+                (friend_username, 'none')
+            )
+            print(f"Usuário '{friend_username}' adicionado à sua lista de amigos.")
+            return True
+        except psycopg2.Error as e:
+            print(f"[DB_ERROR] Falha ao adicionar amigo: {e}")
+            return False
+
+    def get_friends(self) -> list:
+        """Retorna a lista de amigos."""
+        self.cur.execute("SELECT username FROM friends")
+        return [row[0] for row in self.cur.fetchall()]
+
+    def is_friend(self, friend_username: str) -> bool:
+        """Verifica se um nome de usuário existe na tabela de amigos."""
+        self.cur.execute("SELECT 1 FROM friends WHERE username = %s", (friend_username,))
+        return self.cur.fetchone() is not None

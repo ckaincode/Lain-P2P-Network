@@ -139,6 +139,14 @@ class TrackerDB:
         
         return {"peers": peers, "chunk_count": chunk_count}
 
+
+    def get_peer_address(self, username):
+        """Busca o endereço de um peer específico que está ativo."""
+        self.cur.execute(
+            "SELECT ip, port FROM active_peers WHERE username = %s",
+            (username,)
+        )
+        return self.cur.fetchone() # Retorna (ip, port) ou None
         
 '''
     def get_active_peers_for_file(self, file_hash):
