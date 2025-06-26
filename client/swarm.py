@@ -10,11 +10,17 @@ class Swarm:
         self.peer_rates = {}
         self.peer_states = {}
         self.uploaders = []
+        
+        # --- NOVOS ATRIBUTOS DE ESTADO ---
+        self.requested_chunks = set() # Rastreia chunks que já pedimos
+        self.is_reconstructing = False # Impede a reconstrução dupla
+
         if file_hash:
             print(f"Swarm para o arquivo {file_hash[:15]}... foi criado.")
         else:
             print("Swarm inicializado sem um arquivo ativo.")
-
+    
+    # ... (o resto da sua classe Swarm continua igual)
     def add_peer(self, address):
         if address not in self.peer_rates:
             self.peer_rates[address] = {'download_bytes': 0}

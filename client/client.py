@@ -141,53 +141,62 @@ def handle_peer_session(conn, addr):
                 action = msg.get("action")
                 file_hash = msg.get("file_hash")
                 
+    # Em client.py -> dentro da sua função unificada de comunicação (handle_peer_session)
 
                 if action == "CHUNK":
                     index = msg.get("piece_index")
-                    payload_b64 = msg.get("payload") # Pega o payload em base64
                     
-                    # --- LÓGICA DE SALVAMENTO ADICIONADA ---
-                    # Salva o pacote do chunk recebido em um arquivo .json.
-                    # A função reconstruct_file usará este arquivo.
+                    # --- PASSO 1: ATUALIZA O ESTADO "EM TRÂNSITO" ---
+                    # Se recebemos este chunk, ele não está mais "sendo solicitado".
+                    # Isso libera outras threads para pedirem outros chunks.
+                    if swarm and index in swarm.requested_chunks:
+                        try:
+                            swarm.requested_chunks.remove(index)
+                        except KeyError:
+                            # Ignora o erro se outra thread já tiver removido, o que é normal
+                            pass
+
+                    # --- PASSO 2: A SUA LÓGICA DE SALVAMENTO (QUE ESTÁ CORRETA) ---
+                    # Esta parte continua a mesma. Salva o chunk no disco.
+                    payload_b64 = msg.get("payload")
                     try:
                         chunk_dir = os.path.join(logged_user, "files", file_hash)
                         os.makedirs(chunk_dir, exist_ok=True)
                         chunk_path = os.path.join(chunk_dir, f"{index}.json")
-                        
-                        # Recria o pacote do chunk como ele deve ser salvo
-                        # (assumindo que o checksum e outros campos estão na msg)
                         pkt_to_save = {
-                            "action": "CHUNK",
-                            "file_hash": file_hash,
-                            "piece_index": index,
-                            "checksum": msg.get("checksum"),
-                            "payload": payload_b64
+                            "action": "CHUNK", "file_hash": file_hash, "piece_index": index,
+                            "checksum": msg.get("checksum"), "payload": payload_b64
                         }
-                        
                         with open(chunk_path, "w") as f:
                             json.dump(pkt_to_save, f)
-
                     except Exception as e:
                         print(f"[!] Erro ao salvar chunk {index} no disco: {e}")
-                        continue # Pula para a próxima iteração do loop
-
-                    # O resto da sua lógica continua igual...
-                    # (Aqui você pode adicionar a validação do checksum se desejar)
-                    db.mark_chunk_received(file_hash, index)
-                    if swarm:
-                        # Decodifica o payload para obter o tamanho real dos dados
-                        payload_bytes = base64.b64decode(payload_b64)
-                        swarm.record_chunk_received(peer_id, len(payload_bytes))
+                        continue # Pula para a próxima iteração se não conseguir salvar
                     
-                    print(f"[Downloader] Chunk {index} de {peer_id} salvo!")
-                    broadcast_have(file_hash, index)
+                    # --- PASSO 3: MARCA O CHUNK COMO RECEBIDO E ATUALIZA O SWARM ---
+                    # Esta parte também continua como estava.
+                    # A função mark_chunk_received retorna False se o chunk já foi marcado,
+                    # então usamos isso para evitar contagem dupla de bytes.
+                    if db.mark_chunk_received(file_hash, index):
+                        if swarm:
+                            payload_bytes = base64.b64decode(payload_b64)
+                            swarm.record_chunk_received(peer_id, len(payload_bytes))
+                        
+                        print(f"[Downloader] Chunk {index} de {peer_id} salvo!")
+                        broadcast_have(file_hash, index)
 
-                    # E finalmente, verifica se o download terminou
+                    # --- PASSO 4: VERIFICA A RECONSTRUÇÃO DE FORMA SEGURA ---
+                    # A flag 'is_reconstructing' impede a reconstrução dupla.
                     if db.has_all_chunks(file_hash):
-                        print(f"✅ Download completo! Reconstruindo o arquivo...")
-                        output_path = os.path.join("downloads", f"{file_hash}.bin") # Salva o arquivo final na pasta 'downloads'
-                        reconstruct_file(logged_user, file_hash, output_path)
-                        break # Encerra a sessão com este peer
+                        if swarm and not swarm.is_reconstructing:
+                            swarm.is_reconstructing = True # Seta a flag para que apenas esta thread reconstrua!
+                            print(f"✅ Download completo! Reconstruindo o arquivo...")
+                            output_path = os.path.join("downloads", f"{file_hash}.bin")
+                            reconstruct_file(logged_user, file_hash, output_path)
+                        
+                        # O break aqui é importante para encerrar a thread após o download.
+                        break
+
                 elif action == "UNCHOKE":
                     if swarm: swarm.update_peer_choke_status(peer_id, is_choking=False)
                 elif action == "HAVE":
@@ -208,13 +217,27 @@ def handle_peer_session(conn, addr):
 
             # PARTE DE ESCRITA (ENVIAR PEDIDOS DE CHUNK)
             if swarm and swarm.file_hash and not db.has_all_chunks(swarm.file_hash):
-                if time.time() - last_request_time > 3: # Intervalo entre os pedidos
+                if time.time() - last_request_time > 3:
                     if not swarm.peer_states.get(peer_id, {}).get('peer_choking', True):
+                        
                         my_bitmap = db.get_bitmap(swarm.file_hash)
-                        needed_pieces = [i for i, have in enumerate(my_bitmap) if not have]
-                        if needed_pieces:
-                            piece_to_request = random.choice(needed_pieces)
-                            print(f"[{peer_id}] Solicitando chunk aleatório {piece_to_request}...")
+                        
+                        # --- LÓGICA DE SELEÇÃO CORRIGIDA ---
+                        # 1. Pega os chunks que precisamos
+                        needed_pieces = {i for i, have in enumerate(my_bitmap) if not have}
+                        
+                        # 2. Subtrai os que já foram pedidos por outras threads
+                        available_to_request = needed_pieces - swarm.requested_chunks
+                        
+                        if available_to_request:
+                            # 3. Escolhe um chunk aleatório dos que estão realmente disponíveis
+                            piece_to_request = random.choice(list(available_to_request))
+                            
+                            print(f"[{peer_id}] Solicitando chunk único {piece_to_request}...")
+                            
+                            # 4. Marca o chunk como "em trânsito"
+                            swarm.requested_chunks.add(piece_to_request)
+                            
                             send_json(conn, {"action": "GET_CHUNK", "file_hash": swarm.file_hash, "piece_index": piece_to_request})
                             last_request_time = time.time()
             time.sleep(0.5)
