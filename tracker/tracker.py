@@ -1,6 +1,7 @@
 from socket import *
 import threading
 import json
+import requests 
 import time
 from common.utils import recv_json, send_json, hash_password
 from tracker.bd import TrackerDB
@@ -26,8 +27,11 @@ def threadedConn(conn, addr):
             elif action == "login":
                 username = msg["username"]
                 password_hash = msg["password"]
-                client_ip,client_port = conn.getpeername()
-                if db.authenticate_user(username, password_hash, client_ip,client_port):
+                port = msg["port"] # Recebe a porta da mensagem
+                client_ip, _ = conn.getpeername() # Pega apenas o IP da conexão
+                
+                # Usa o IP da conexão, mas a porta informada pelo cliente
+                if db.authenticate_user(username, password_hash, client_ip, port):
                     send_json(conn, {"status": "ok"})
                 else:
                     send_json(conn, {"status": "error", "message": "Login inválido"})
@@ -35,12 +39,22 @@ def threadedConn(conn, addr):
             elif action == "announce_file":
                 username = msg["username"]
                 file = msg["file"]
-                file_id = db.register_file(file["name"], file["size"], file["hash"])
+                chunk_count = msg["chunk_count"]
+                file_id = db.register_file(file["name"], file["size"], file["hash"],chunk_count)
                 if file_id:
-                    db.link_file_to_user(file["hash"], username,addr)
+                    db.link_file_to_user(file["hash"], username,True)
                     send_json(conn, {"status": "ok"})
                 else:
                     send_json(conn, {"status": "error", "message": "Erro ao registrar arquivo"})
+            
+            elif action == "get_peer_address":
+                username = msg.get("username")
+                address = db.get_peer_address(username)
+                if address:
+                    ip, port = address
+                    send_json(conn, {"status": "ok", "ip": ip, "port": port})
+                else:
+                    send_json(conn, {"status": "not_found", "message": "Usuário offline ou não existe."})
 
             elif action == "get_online":
                 ativos = db.get_active_peers()
@@ -57,10 +71,11 @@ def threadedConn(conn, addr):
                     send_json(conn, {"status": "error", "message": "Hash não fornecido."})
                     return
 
-                peers = db.get_active_peers_for_file(file_hash)
+                file_info = db.get_active_peers_for_file(file_hash)
 
-                if peers:
+                if file_info and file_info["peers"]:
                     # Constrói a resposta com os peers ativos que têm o arquivo
+                    '''
                     peer_list = []
                     for username, ip, port in peers:
                         peer_list.append({
@@ -73,9 +88,17 @@ def threadedConn(conn, addr):
                         "status": "ok",
                         "peers": peer_list
                     })
-                else:
+                    '''
+
+                if file_info and file_info["peers"]:
                     send_json(conn, {
                         "status": "ok",
+                        "peers": file_info["peers"],
+                        "chunk_count": file_info["chunk_count"] # Envia o chunk_count para o downloader
+                    })
+                else:
+                    send_json(conn, {
+                        "status": "not_found",
                         "peers": "Não há peers como esse arquivo!"
                     })
 
@@ -91,6 +114,21 @@ def threadedConn(conn, addr):
                         send_json(conn, {"status": "error", "message": "Erro interno ao registrar heartbeat"})
                 else:
                     send_json(conn, {"status": "error", "message": "Username não fornecido no heartbeat"})
+            
+            elif action == "join_swarm":
+                username = msg["username"]
+                hash = msg["hash"]
+                announcer = msg["announcer"]
+                if username:
+                    try:
+                        db.link_file_to_user(hash,username,announcer)
+                        send_json(conn, {'status': "ok"})
+                    except Exception as e:
+                        print(f"Erro no registro de {username}: {e}")
+                        send_json(conn, {"status": "error", "message": "Erro ao se juntar ao swarm"})
+                else:
+                    send_json(conn, {"status": "error", "message": "Username não fornecido para swarm"})
+
                     
             elif action == "logout":
                 username = msg["username"]
@@ -113,7 +151,6 @@ def threadedConn(conn, addr):
         conn.close()
         print(f"Conexão encerrada com {addr}")
 
-# Não utilizada por enquanto
 def clean_loop():
     dblocal = TrackerDB(5432)
     while True:

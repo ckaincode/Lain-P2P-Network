@@ -1,5 +1,6 @@
 import psycopg2 # Módulo de Interface com o DB
 import time
+import requests
 
 """
 MUDAR DE ACORDO COM CONFIGURAÇÃO LOCAL
@@ -48,11 +49,12 @@ class TrackerDB:
             self.conn.commit()
         return user is not None
 
-    def register_file(self, name, size, file_hash):
+    def register_file(self, name, size, file_hash,chunk_count):
         try:
             self.cur.execute(
-                "INSERT INTO files (name, size, hash) VALUES (%s, %s, %s) ON CONFLICT (hash) DO NOTHING RETURNING id",
-                (name, size, file_hash)
+                # Insere o chunk_count
+                "INSERT INTO files (name, size, hash, chunk_count) VALUES (%s, %s, %s, %s) ON CONFLICT (hash) DO NOTHING RETURNING id",
+                (name, size, file_hash, chunk_count)
             )
             row = self.cur.fetchone()
             if row:
@@ -66,7 +68,7 @@ class TrackerDB:
             print("[DB ERROR]", e)
             return None
         
-    def link_file_to_user(self, file_hash, username, addr):
+    def link_file_to_user(self, file_hash, username, announcer):
         try:
             # Pega o id do arquivo
             self.cur.execute("SELECT id FROM files WHERE hash = %s", (file_hash,))
@@ -76,8 +78,8 @@ class TrackerDB:
 
             # Insere na tabela file_owners usando os ids corretos
             self.cur.execute(
-                "INSERT INTO file_owners (file_id, username, ip, port) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (file_id,username,addr[0],addr[1])
+                "INSERT INTO file_owners (file_id, username,announcer) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (file_id,username,announcer)
             )
             self.conn.commit()
             return True
@@ -87,7 +89,7 @@ class TrackerDB:
     def cleanup_inactive_users(self):
         try:
             print("Limpando...")
-            self.cur.execute("DELETE FROM active_peers WHERE last_seen < NOW() - INTERVAL '40 seconds'")
+            self.cur.execute("DELETE FROM active_peers WHERE last_seen < NOW() - INTERVAL '20 seconds'")
             self.conn.commit()
             self.cur.execute("SELECT * FROM active_peers;")
             active = self.cur.fetchall()
@@ -115,17 +117,46 @@ class TrackerDB:
             FROM active_peers ap
 """ )
         return self.cur.fetchall()
-        
-
+    
     def get_active_peers_for_file(self, file_hash):
+        # Esta query agora busca o chunk_count também
         self.cur.execute("""
-            SELECT u.username, fo.ip, fo.port
+            SELECT u.username, ap.ip, ap.port, f.chunk_count   
             FROM files f
             JOIN file_owners fo ON f.id = fo.file_id
             JOIN active_peers ap ON fo.username = ap.username
             JOIN users u ON u.username = fo.username
             WHERE f.hash = %s
         """, (file_hash,))      
-        return self.cur.fetchall()
-
         
+        results = self.cur.fetchall()
+        if not results:
+            return None
+            
+        # Estrutura a resposta
+        peers = [{"username": r[0], "ip": r[1], "port": r[2]} for r in results]
+        chunk_count = results[0][3] # O chunk_count é o mesmo para todos os resultados
+        
+        return {"peers": peers, "chunk_count": chunk_count}
+
+
+    def get_peer_address(self, username):
+        """Busca o endereço de um peer específico que está ativo."""
+        self.cur.execute(
+            "SELECT ip, port FROM active_peers WHERE username = %s",
+            (username,)
+        )
+        return self.cur.fetchone() # Retorna (ip, port) ou None
+        
+'''
+    def get_active_peers_for_file(self, file_hash):
+            self.cur.execute("""
+                SELECT u.username, ap.ip, ap.port     
+                FROM files f
+                JOIN file_owners fo ON f.id = fo.file_id
+                JOIN active_peers ap ON fo.username = ap.username
+                JOIN users u ON u.username = fo.username
+                WHERE f.hash = %s
+            """, (file_hash,))      
+            return self.cur.fetchall()
+'''
