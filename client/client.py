@@ -1,5 +1,3 @@
-# client.py - VERSÃO FINAL
-
 import socket, hashlib, random, threading, base64, json, shutil, time, os
 from common.utils import send_json, recv_json, hash_password, make_pkt, divide_in_chunks
 from client.swarm import Swarm
@@ -141,15 +139,14 @@ def handle_peer_session(conn, addr):
     try:
         conn.setblocking(False)
         while True:
-            # PARTE DE LEITURA DE MENSAGENS
+       
             try:
                 msg = recv_json(conn)
                 if not msg: break
                 
                 action = msg.get("action")
                 file_hash = msg.get("file_hash")
-                
-    # Em client.py -> dentro da sua função unificada de comunicação (handle_peer_session)
+
                 if action == "HANDSHAKE":
                     peer_username = msg.get("username")
                     print(f"Handshake recebido: {peer_id} é {peer_username}")
@@ -160,18 +157,8 @@ def handle_peer_session(conn, addr):
                 if action == "CHUNK":
                     index = msg.get("piece_index")
                     
-                    # --- PASSO 1: ATUALIZA O ESTADO "EM TRÂNSITO" ---
-                    # Se recebemos este chunk, ele não está mais "sendo solicitado".
-                    # Isso libera outras threads para pedirem outros chunks.
-                    if swarm and index in swarm.requested_chunks:
-                        try:
-                            swarm.requested_chunks.remove(index)
-                        except KeyError:
-                            # Ignora o erro se outra thread já tiver removido, o que é normal
-                            pass
+                    swarm.requested_chunks.discard(index)
 
-                    # --- PASSO 2: A SUA LÓGICA DE SALVAMENTO (QUE ESTÁ CORRETA) ---
-                    # Esta parte continua a mesma. Salva o chunk no disco.
                     payload_b64 = msg.get("payload")
                     try:
                         chunk_dir = os.path.join(logged_user, "files", file_hash)
@@ -185,30 +172,27 @@ def handle_peer_session(conn, addr):
                             json.dump(pkt_to_save, f)
                     except Exception as e:
                         print(f"[!] Erro ao salvar chunk {index} no disco: {e}")
-                        continue # Pula para a próxima iteração se não conseguir salvar
+                        continue 
                     
-                    # --- PASSO 3: MARCA O CHUNK COMO RECEBIDO E ATUALIZA O SWARM ---
-                    # Esta parte também continua como estava.
-                    # A função mark_chunk_received retorna False se o chunk já foi marcado,
-                    # então usamos isso para evitar contagem dupla de bytes.
+ 
                     if db.mark_chunk_received(file_hash, index):
+                    
                         if swarm:
+
                             payload_bytes = base64.b64decode(payload_b64)
                             swarm.record_chunk_received(peer_id, len(payload_bytes))
                         
                         print(f"[Downloader] Chunk {index} de {peer_id} salvo!")
                         broadcast_have(file_hash, index)
 
-                    # --- PASSO 4: VERIFICA A RECONSTRUÇÃO DE FORMA SEGURA ---
-                    # A flag 'is_reconstructing' impede a reconstrução dupla.
+
                     if db.has_all_chunks(file_hash):
-                        if swarm and not swarm.is_reconstructing:
-                            swarm.is_reconstructing = True # Seta a flag para que apenas esta thread reconstrua!
+                        if swarm and not swarm.is_reconstructing: #flag pra impedir dois arquivos
+                            swarm.is_reconstructing = True
                             print(f"✅ Download completo! Reconstruindo o arquivo...")
-                            output_path = os.path.join("downloads", f"{file_hash}.bin")
+                            output_path = os.path.join(f"downloads/{logged_user}", f"{file_hash}.bin")
                             reconstruct_file(logged_user, file_hash, output_path)
-                        
-                        # O break aqui é importante para encerrar a thread após o download.
+
                         break
 
                 elif action == "UNCHOKE":
@@ -220,32 +204,27 @@ def handle_peer_session(conn, addr):
                     recipient = msg.get("to_user")
                     text = msg.get("text")
 
-                    # 1. Verifica se a mensagem é para nós e se o remetente é um amigo.
                     if recipient == logged_user and db.is_friend(sender):
                         print(f"\n\n--- Nova Mensagem de {sender} ---")
                         print(f"> {text}")
                         print("---------------------------------")
 
-                        # 2. Lógica para salvar a mensagem em um arquivo de log.
                         try:
-                            # Garante um nome de arquivo consistente ordenando os nomes.
-                            # Ex: o chat entre 'a' e 'b' sempre será 'a-b_chat.txt'.
+
                             log_participants = sorted([logged_user, sender])
                             log_filename = f"{log_participants[0]}-{log_participants[1]}_chat.log"
-                            
-                            # Cria o diretório de logs se ele não existir.
+
                             os.makedirs("chat_logs", exist_ok=True)
                             log_path = os.path.join("chat_logs", log_filename)
                             
-                            # Escreve a mensagem no arquivo com data e hora.
+
                             with open(log_path, "a") as log_file:
-                                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                                timestamp = time.strftime("%Y-%m-%d %H:%M:%S") # hora da mensagem
                                 log_file.write(f"[{timestamp}] {sender}: {text}\n")
 
                         except Exception as e:
                             print(f"[!] Falha ao salvar a mensagem no log: {e}")
                         
-                        # Imprime o prompt de input novamente para não quebrar a interface do usuário.
                         print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[4] Adicionar Amigo\n[5] Enviar Mensagem\n[9] Logout\n[0] Sair")
                         print(">> ", end="", flush=True)
 
@@ -263,27 +242,23 @@ def handle_peer_session(conn, addr):
             except BlockingIOError: pass
             except Exception as e: print(f"[!] Erro na thread de leitura com {peer_id}: {e}"); break
 
-            # PARTE DE ESCRITA (ENVIAR PEDIDOS DE CHUNK)
             if swarm and swarm.file_hash and not db.has_all_chunks(swarm.file_hash):
                 if time.time() - last_request_time > 3:
                     if not swarm.peer_states.get(peer_id, {}).get('peer_choking', True):
                         
                         my_bitmap = db.get_bitmap(swarm.file_hash)
                         
-                        # --- LÓGICA DE SELEÇÃO CORRIGIDA ---
-                        # 1. Pega os chunks que precisamos
+
                         needed_pieces = {i for i, have in enumerate(my_bitmap) if not have}
                         
-                        # 2. Subtrai os que já foram pedidos por outras threads
-                        available_to_request = needed_pieces - swarm.requested_chunks
+                        available_to_request = needed_pieces
                         
                         if available_to_request:
-                            # 3. Escolhe um chunk aleatório dos que estão realmente disponíveis
-                            piece_to_request = random.choice(list(available_to_request))
+
+                            piece_to_request = random.choice(list(available_to_request)) #pega um aleatório dos disponíveis
                             
                             print(f"[{peer_id}] Solicitando chunk único {piece_to_request}...")
-                            
-                            # 4. Marca o chunk como "em trânsito"
+                  
                             swarm.requested_chunks.add(piece_to_request)
                             
                             send_json(conn, {"action": "GET_CHUNK", "file_hash": swarm.file_hash, "piece_index": piece_to_request})
@@ -291,7 +266,6 @@ def handle_peer_session(conn, addr):
             time.sleep(0.5)
     finally:
         print(f"[-] Encerrando sessão com {peer_id}.")
-        # Remove o usuário do mapeamento ao desconectar
         disconnected_user = next((user for user, pid in username_to_peer_id.items() if pid == peer_id), None)
         if disconnected_user:
             del username_to_peer_id[disconnected_user]
@@ -299,7 +273,7 @@ def handle_peer_session(conn, addr):
         conn.close()
         if peer_id in active_sockets: del active_sockets[peer_id]
         if swarm: swarm.remove_peer(peer_id)
-
+        
 def add_friend_ui():
     """Interface para adicionar um amigo."""
     friend_name = input("Digite o nome de usuário do amigo a ser adicionado: ").strip()
@@ -312,7 +286,7 @@ def add_friend_ui():
 
 
 def send_message_ui():
-    """Interface para enviar uma mensagem direta que reutiliza conexões existentes."""
+    # Interface para enviar uma mensagem direta que reutiliza conexões existentes.
     recipient = input("Digite o nome do amigo para quem quer enviar a mensagem: ").strip()
     message_text = input("Digite sua mensagem: ")
 
@@ -331,7 +305,6 @@ def send_message_ui():
                 # Inicia a thread de sessão para a nova conexão
                 threading.Thread(target=handle_peer_session, args=(conn, addr), daemon=True).start()
                 time.sleep(0.5) # Dá tempo para o handshake ocorrer
-                # Após o handshake, a conexão deve estar nos nossos mapas
                 peer_id = username_to_peer_id.get(recipient)
                 if peer_id:
                     target_socket = active_sockets[peer_id]
@@ -340,7 +313,6 @@ def send_message_ui():
         else:
             print(f"Não foi possível encontrar {recipient}. Ele pode estar offline.")
 
-    # Envia a mensagem se tivermos um socket válido
     if target_socket:
         message = {
             "action": "PRIVATE_MESSAGE", "from_user": logged_user,
@@ -352,7 +324,7 @@ def send_message_ui():
         print("Falha ao enviar mensagem.")
 
 def get_address_for_user(username):
-    """Pede ao tracker o endereço de um usuário específico."""
+    # requisição ao tracker
     try:
         with connect_to_tracker() as sock:
             send_json(sock, {"action": "get_peer_address", "username": username})
@@ -374,6 +346,7 @@ def handle_requests_peers():
         conn, addr = server.accept()
         threading.Thread(target=handle_peer_session, args=(conn, addr), daemon=True).start()
 
+# Aqui Acontece Choke e Unchoke
 def upload_manager_loop():
     while True:
         time.sleep(10)
@@ -390,8 +363,8 @@ def reconstruct_file(username, file_hash, output_path):
     if not os.path.isdir(chunk_dir): return False
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     try:
-        # A lógica para ler os pacotes JSON salvos está faltando ou incorreta.
-        # Vamos assumir que make_pkt salvou o payload como base64 no JSON.
+       
+        # base64, binário não deu certo no JSON
         chunk_files = sorted([f for f in os.listdir(chunk_dir) if f.endswith(".json")], key=lambda f: int(f.split(".")[0]))
         with open(output_path, "wb") as out_f:
             for fname in chunk_files:
