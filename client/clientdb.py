@@ -1,12 +1,11 @@
-# clientdb.py - VERSÃO FINAL E CORRIGIDA
+
 
 import psycopg2
 
 class PeerDB:
     def __init__(self, username, dbname='p2p_peer', user='caiocesar', password='lokoloco10', host='localhost', port=5432):
         try:
-            # Se você estiver usando um DB por peer, a linha abaixo pode ser usada.
-            # dbname = f"peer_db_{username}"
+            # RECONFIGURAR DE ACORDO COM AMBIENTE LOCAL
             self.conn = psycopg2.connect(dbname=dbname, user=user, password=password, host=host, port=port)
             self.conn.autocommit = True
             self.username = username
@@ -21,8 +20,8 @@ class PeerDB:
         return self.cur.fetchone() is not None
 
     def create_or_reset_file_entry(self, uowner, file_hash, chunk_amt):
-        # CORREÇÃO CRÍTICA: Calcula o número de bytes corretamente.
-        num_bytes = (chunk_amt + 7) // 8
+        # Criação do BitMap
+        num_bytes = (chunk_amt + 7) // 8 
         empty_map = bytearray(num_bytes)
         self.cur.execute(
             "INSERT INTO my_files (uowner, file_hash, chunk_amt, curr_chunk_amt, chunk_bit_map) VALUES (%s, %s, %s, 0, %s) "
@@ -66,28 +65,23 @@ class PeerDB:
             bit_map = row[0]
             byte_index, bit_index_from_left = divmod(index, 8)
 
-            # Garante que o byte_index não esteja fora dos limites do bitmap
             if byte_index >= len(bit_map):
                 print(f"[DB_WARN] Índice de chunk {index} está fora dos limites do bitmap.")
                 return False
 
-            # --- CORREÇÃO DEFINITIVA DO TYPEERROR ---
-            # Pega o byte específico e garante que estamos trabalhando com seu valor inteiro.
             byte_value = bit_map[byte_index]
             int_value = byte_value[0] if isinstance(byte_value, bytes) else byte_value
             
             # Checa o bit atual para evitar contagem dupla de chunks
             if (int_value >> (7 - bit_index_from_left)) & 1:
-                return True # O bit já é 1, não faz nada.
+                return True 
 
-            # Cria uma cópia mutável do bitmap para modificação
             mutable_bitmap = bytearray(bit_map)
             
-            # Cria a máscara para setar o bit para 1
+
             mask = 1 << (7 - bit_index_from_left)
             mutable_bitmap[byte_index] |= mask
             
-            # Atualiza o banco de dados
             self.cur.execute(
                 "UPDATE my_files SET chunk_bit_map = %s, curr_chunk_amt = curr_chunk_amt + 1 WHERE uowner = %s AND file_hash = %s",
                 (bytes(mutable_bitmap), self.username, file_hash)
