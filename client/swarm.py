@@ -17,6 +17,9 @@ class Swarm:
         # {piece_index: (timestamp, peer_id)}
         self.requested_chunks = {}
 
+        self.download_start_time = None
+        self.download_end_time = None
+
         self.piece_availability = [0] * self.chunk_count
         
         self.is_reconstructing = False
