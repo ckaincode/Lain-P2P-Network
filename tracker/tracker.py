@@ -129,6 +129,18 @@ def threadedConn(conn, addr):
                 else:
                     send_json(conn, {"status": "error", "message": "Username não fornecido para swarm"})
 
+            elif action == "list_files":
+                files = db.get_all_files()
+                file_list = []
+                if files:
+                    for name, file_hash, size in files:
+                        file_list.append({
+                            "name": name,
+                            "hash": file_hash,
+                            "size": size
+                        })
+                send_json(conn, {"status": "ok", "files": file_list})
+
                     
             elif action == "logout":
                 username = msg["username"]

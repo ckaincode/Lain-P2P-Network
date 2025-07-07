@@ -6,6 +6,7 @@ from client.clientdb import PeerDB
 TRACKER_HOST = 'localhost'
 TRACKER_PORT = 5000
 LISTENING_PORT = 0
+download_start =  0
 logged_user = None
 logged_menu = False
 swarm = None
@@ -55,7 +56,7 @@ def announce_file(username, file_name, file_path):
                 if not db.entry_exists(file_hash):
                     db.create_or_reset_file_entry(username, file_hash, chunk_count)
                 db.mark_file_as_complete(file_hash, chunk_count)
-                swarm = Swarm(file_hash, db)
+                swarm = Swarm(file_hash, db,chunk_count)
             else: print("Erro ao anunciar arquivo.")
     except Exception as e: print(f"Erro ao ler arquivo: {e}")
 
@@ -92,26 +93,35 @@ def download_file(file_hash):
     peers_list = file_info["peers"]
     chunk_count = file_info["chunk_count"]
 
-    if not db.entry_exists(file_hash):
-        print(f"Arquivo novo. Criando entrada local para {chunk_count} chunks...")
+    if db.entry_exists(file_hash):
+        # Valida se chunk_amt do banco bate com o tracker
+        # Se não bater, recria a entrada (reset)
+        local_chunk_amt = db.get_chunk_amt(file_hash)
+        if local_chunk_amt != chunk_count:
+            print("[!] chunk_amt divergente! Recriando entrada local...")
+            db.create_or_reset_file_entry(logged_user, file_hash, chunk_count)
+    else:
         db.create_or_reset_file_entry(logged_user, file_hash, chunk_count)
-    else: print("Resumindo download.")
 
+    swarm = Swarm(file_hash, db,chunk_count)
     try:
         with connect_to_tracker() as sckt:
             send_json(sckt, {"action": "join_swarm", "username": logged_user, "hash": file_hash, "announcer": False})
             res = recv_json(sckt)
             if not res or res.get('status') != 'ok':
-                print("[!] Falha ao se registrar no swarm do tracker."); return
-    except Exception as e: print(f"[!] Erro ao entrar no swarm: {e}"); return
-        
-    swarm = Swarm(file_hash, db)
+                print("[!] Falha ao se registrar no swarm do tracker.")
+                swarm = None
+                return
+    except Exception as e: print(f"[!] Erro ao entrar no swarm: {e}"); swarm = None; return
     
     print("Iniciando sessões com os peers...")
     for peer in peers_list:
         if peer["username"] == logged_user: continue
         try:
-            conn = socket.create_connection((peer['ip'], peer['port']), timeout=5)
+            if f"{peer['ip']}:{peer['port']}" in active_sockets:
+                print(f"[!] Já conectado com {peer['username']}, pulando...")
+                continue
+            conn = socket.create_connection((peer['ip'], peer['port']), timeout=10)
             threading.Thread(target=handle_peer_session, args=(conn, (peer['ip'], peer['port'])), daemon=True).start()
         except Exception as e: print(f"[✘] Falha ao iniciar sessão com {peer['username']}: {e}")
 
@@ -129,13 +139,10 @@ def handle_peer_session(conn, addr):
     try:
         send_json(conn, {"action": "HANDSHAKE", "username": logged_user})
     except Exception as e:
-        print(f"[!] Falha no handshake inicial com {peer_id}: {e}")
-        # Encerra a sessão se o handshake inicial falhar
-        if peer_id in active_sockets: del active_sockets[peer_id]
-        conn.close()
-        return
-    last_request_time = 0
+        print(f"[!] Falha no handshake/bitfield com {peer_id}: {e}")
+        conn.close(); active_sockets.pop(peer_id, None); return
 
+    last_request_time = 0
     try:
         conn.setblocking(False)
         while True:
@@ -152,21 +159,33 @@ def handle_peer_session(conn, addr):
                     print(f"Handshake recebido: {peer_id} é {peer_username}")
                     username_to_peer_id[peer_username] = peer_id
                     # Adiciona ao swarm APÓS saber quem é o peer
-                    if swarm: swarm.add_peer(peer_id)
+                    if swarm:
+                        my_bitmap = db.get_bitmap(swarm.file_hash)
+                        send_json(conn, {"action": "BITFIELD", "file_hash": swarm.file_hash, "bitmap": my_bitmap})
+                        swarm.add_peer(peer_id)
 
-                if action == "CHUNK":
+                elif action == "BITFIELD":
+                    if swarm and file_hash == swarm.file_hash:
+                        swarm.update_peer_bitmap(peer_id, msg.get("bitmap"))
+
+                elif action == "CHUNK":
                     index = msg.get("piece_index")
-                    
-                    swarm.requested_chunks.discard(index)
-
                     payload_b64 = msg.get("payload")
+                    payload_bytes = base64.b64decode(payload_b64)
+                    checksum = hashlib.sha256(payload_bytes + index.to_bytes(4, byteorder='big')).hexdigest()
+                    if checksum != msg.get("checksum"):
+                        print(f"[!] Chunk {index} corrompido de {peer_id}, ignorado.")
+                        continue
+                    swarm.requested_chunks.pop(index, None)
+                    #swarm.requested_chunks.discard(index)
+
                     try:
                         chunk_dir = os.path.join(logged_user, "files", file_hash)
                         os.makedirs(chunk_dir, exist_ok=True)
                         chunk_path = os.path.join(chunk_dir, f"{index}.json")
                         pkt_to_save = {
                             "action": "CHUNK", "file_hash": file_hash, "piece_index": index,
-                            "checksum": msg.get("checksum"), "payload": payload_b64
+                            "checksum": checksum, "payload": payload_b64
                         }
                         with open(chunk_path, "w") as f:
                             json.dump(pkt_to_save, f)
@@ -178,8 +197,6 @@ def handle_peer_session(conn, addr):
                     if db.mark_chunk_received(file_hash, index):
                     
                         if swarm:
-
-                            payload_bytes = base64.b64decode(payload_b64)
                             swarm.record_chunk_received(peer_id, len(payload_bytes))
                         
                         print(f"[Downloader] Chunk {index} de {peer_id} salvo!")
@@ -193,10 +210,10 @@ def handle_peer_session(conn, addr):
                             output_path = os.path.join(f"downloads/{logged_user}", f"{file_hash}.bin")
                             reconstruct_file(logged_user, file_hash, output_path)
 
-                        break
-
                 elif action == "UNCHOKE":
                     if swarm: swarm.update_peer_choke_status(peer_id, is_choking=False)
+                elif action == "CHOKE":
+                    if swarm : swarm.update_peer_choke_status(peer_id, is_choking=True)
                 elif action == "HAVE":
                     if swarm: swarm.mark_peer_have_chunk(peer_id, msg.get("index"))
                 elif action == "PRIVATE_MESSAGE":
@@ -242,28 +259,25 @@ def handle_peer_session(conn, addr):
             except BlockingIOError: pass
             except Exception as e: print(f"[!] Erro na thread de leitura com {peer_id}: {e}"); break
 
-            if swarm and swarm.file_hash and not db.has_all_chunks(swarm.file_hash):
-                if time.time() - last_request_time > 3:
+            if swarm and swarm.file_hash:
+                if not db.has_all_chunks(swarm.file_hash):
+                    swarm.check_request_timeouts()
+
                     if not swarm.peer_states.get(peer_id, {}).get('peer_choking', True):
                         
-                        my_bitmap = db.get_bitmap(swarm.file_hash)
+                        # Usa a lógica RAREST FIRST para escolher a peça
+                        piece_to_request = swarm.select_rarest_piece_to_request(peer_id)
                         
-
-                        needed_pieces = {i for i, have in enumerate(my_bitmap) if not have}
-                        
-                        available_to_request = needed_pieces
-                        
-                        if available_to_request:
-
-                            piece_to_request = random.choice(list(available_to_request)) #pega um aleatório dos disponíveis
+                        if piece_to_request is not None:
+                            print(f"[{peer_id}] Solicitando chunk #{piece_to_request}...")
                             
-                            print(f"[{peer_id}] Solicitando chunk único {piece_to_request}...")
-                  
-                            swarm.requested_chunks.add(piece_to_request)
+                            # Adiciona ao dicionário de requisitados com timestamp
+                            swarm.requested_chunks[piece_to_request] = (time.time(), peer_id)
                             
                             send_json(conn, {"action": "GET_CHUNK", "file_hash": swarm.file_hash, "piece_index": piece_to_request})
                             last_request_time = time.time()
-            time.sleep(0.5)
+            
+                time.sleep(0.1)
     finally:
         print(f"[-] Encerrando sessão com {peer_id}.")
         disconnected_user = next((user for user, pid in username_to_peer_id.items() if pid == peer_id), None)
@@ -294,10 +308,8 @@ def send_message_ui():
     target_socket = None
 
     if peer_id and peer_id in active_sockets:
-        print(f"Reutilizando conexão existente com {recipient}.")
         target_socket = active_sockets[peer_id]
     else:
-        print(f"Iniciando uma nova conexão com {recipient}...")
         addr = get_address_for_user(recipient)
         if addr:
             try:
@@ -346,6 +358,36 @@ def handle_requests_peers():
         conn, addr = server.accept()
         threading.Thread(target=handle_peer_session, args=(conn, addr), daemon=True).start()
 
+def list_available_files():
+    print("\nBuscando lista de arquivos no tracker...")
+    try:
+        with connect_to_tracker() as sock:
+            send_json(sock, {"action": "list_files"})
+            response = recv_json(sock)
+            
+            if response and response.get("status") == "ok":
+                files = response.get("files", [])
+                if not files:
+                    print("ℹ️ Nenhum arquivo disponível no tracker no momento.")
+                    return
+
+                print("\n--- Arquivos Disponíveis ---")
+                print(f"{'Nome do Arquivo':<30} | {'Hash Completo':<64}")
+                print("-" * 98)
+                
+                for f in files:
+                    # Pega o nome e o hash diretamente
+                    name = f.get('name', 'N/A')
+                    file_hash = f.get('hash', '')
+                    print(f"{name:<30} | {file_hash:<64}")
+                    
+                print("-" * 98)
+
+            else:
+                print("❌ Falha ao buscar a lista de arquivos.")
+    except Exception as e:
+        print(f"❌ Erro de conexão ao buscar arquivos: {e}")
+
 # Aqui Acontece Choke e Unchoke
 def upload_manager_loop():
     while True:
@@ -379,11 +421,11 @@ def reconstruct_file(username, file_hash, output_path):
 def logged_thread():
     global db, swarm, logged_menu
     db = PeerDB(username=logged_user) # Usa o banco de dados padrão p2p_peer
-    swarm = Swarm(None, db)
+    #swarm = Swarm(None, db, 0)
     threading.Thread(target=start_heartbeat, args=(logged_user,), daemon=True).start()
     threading.Thread(target=upload_manager_loop, daemon=True).start()   
     while logged_user:
-        print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[4] Adicionar Amigo\n[5]Mandar Mensagem\n[9] Logout\n[0] Sair")
+        print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[4] Adicionar Amigo\n[5] Mandar Mensagem\n[6] Listar Arquivos\n[9] Logout\n[0] Sair")
         op = input(">> ").strip()
         if op == "1":
             file_name = input("Nome: "); file_path = input("Caminho: ")
@@ -396,6 +438,8 @@ def logged_thread():
             add_friend_ui()
         elif op == "5":
             send_message_ui()
+        elif op == "6": # <-- NOVA CONDIÇÃO
+            list_available_files()
         elif op == "9": 
             logout_cl()
         elif op == "0": 
