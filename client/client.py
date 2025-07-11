@@ -443,6 +443,12 @@ def list_available_files():
     except Exception as e:
         print(f"❌ Erro de conexão ao buscar arquivos: {e}")
 
+def quit_swarm(file_hash):
+    global swarm
+    if swarm and swarm.file_hash == file_hash:
+        swarm = None
+    else: print("Swarm inativo ou Hash errado")
+
 # Aqui Acontece Choke e Unchoke
 def upload_manager_loop():
     while True:
@@ -480,7 +486,7 @@ def logged_thread():
     threading.Thread(target=start_heartbeat, args=(logged_user,), daemon=True).start()
     threading.Thread(target=upload_manager_loop, daemon=True).start()   
     while logged_user:
-        print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[4] Adicionar Amigo\n[5] Mandar Mensagem\n[6] Listar Arquivos\n[9] Logout\n[0] Sair")
+        print(f"\nUsuário: {logged_user}\n[1] Anunciar\n[2] Baixar\n[3] Online\n[4] Adicionar Amigo\n[5] Mandar Mensagem\n[6] Listar Arquivos\n[7] Sair do Swarm\n[9] Logout\n[0] Sair")
         op = input(">> ").strip()
         if op == "1":
             file_name = input("Nome: "); file_path = input("Caminho: ")
@@ -495,6 +501,9 @@ def logged_thread():
             send_message_ui()
         elif op == "6": 
             list_available_files()
+        elif op == "7":
+            to_be_removed = input("Hash:")
+            quit_swarm(to_be_removed)
         elif op == "9": 
             logout_cl()
         elif op == "0": 
