@@ -147,6 +147,17 @@ class TrackerDB:
             (username,)
         )
         return self.cur.fetchone() # Retorna (ip, port) ou None
+    
+
+
+    def get_all_files(self):
+        """Busca todos os arquivos registrados no tracker."""
+        try:
+            self.cur.execute("SELECT name, hash, size FROM files ORDER BY name")
+            return self.cur.fetchall()
+        except psycopg2.Error as e:
+            print(f"[DB_ERROR] Falha ao listar arquivos: {e}")
+            return []
         
 '''
     def get_active_peers_for_file(self, file_hash):
